@@ -1,0 +1,49 @@
+{
+  "name": "aircall-mcp",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for the official Aircall REST API",
+  "type": "module",
+  "bin": {
+    "aircall-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "aircall",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "author": "Growthbox",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/growth-box/aircall-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/growth-box/aircall-mcp/issues"
+  },
+  "homepage": "https://github.com/growth-box/aircall-mcp#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  }
+}
