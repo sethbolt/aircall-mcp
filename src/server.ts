@@ -11,8 +11,9 @@ import {
   summarizeNumberMessages,
 } from "./format.js";
 import type { AircallApi, Query } from "./types.js";
+import { VERSION } from "./version.js";
 
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = VERSION;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -198,7 +199,7 @@ export function createAircallServer(api: AircallApi): McpServer {
         include_media_urls: z
           .boolean()
           .default(false)
-          .describe("Include recording, voicemail, and asset URLs"),
+          .describe("Include recording, voicemail, and asset URLs; returns full call records"),
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
@@ -213,7 +214,7 @@ export function createAircallServer(api: AircallApi): McpServer {
           fetch_call_timeline: input.fetch_call_timeline || undefined,
           fetch_aiva_conv: input.fetch_aiva_conv || undefined,
         }, { signal: extra.signal });
-        if (input.compact) result = compactCallsResponse(result);
+        if (input.compact && !input.include_media_urls) result = compactCallsResponse(result);
         if (!input.include_media_urls) result = omitMediaUrls(result);
         return result;
       }),
@@ -269,7 +270,7 @@ export function createAircallServer(api: AircallApi): McpServer {
         include_media_urls: z
           .boolean()
           .default(false)
-          .describe("Include recording, voicemail, and asset URLs"),
+          .describe("Include recording, voicemail, and asset URLs; returns full call records"),
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
@@ -290,7 +291,7 @@ export function createAircallServer(api: AircallApi): McpServer {
           },
           { signal: extra.signal },
         );
-        if (input.compact) result = compactCallsResponse(result);
+        if (input.compact && !input.include_media_urls) result = compactCallsResponse(result);
         if (!input.include_media_urls) result = omitMediaUrls(result);
         return result;
       }),
@@ -377,7 +378,9 @@ export function createAircallServer(api: AircallApi): McpServer {
           },
           { signal: extra.signal },
         );
-        return input.include_message_urls ? result : summarizeNumberMessages(result);
+        return input.include_message_urls
+          ? result
+          : omitMediaUrls(summarizeNumberMessages(result));
       }),
   );
 
@@ -402,7 +405,9 @@ export function createAircallServer(api: AircallApi): McpServer {
           {},
           { signal: extra.signal },
         );
-        return input.include_message_urls ? result : summarizeNumberMessages(result);
+        return input.include_message_urls
+          ? result
+          : omitMediaUrls(summarizeNumberMessages(result));
       }),
   );
 

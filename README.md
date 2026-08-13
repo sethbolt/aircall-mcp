@@ -125,7 +125,9 @@ The client retries one `429` response using Aircall's retry/reset headers. It ot
 
 Call records, contacts, phone numbers, and transcripts may contain personal or confidential information. This server does not store them, but its results are sent to the connected MCP client and ultimately to that client's language-model provider. Review that provider's privacy and retention controls.
 
-Media URLs are omitted by default because they can grant access to recordings or voicemail. Pass the relevant explicit `include_*_urls` option only when needed.
+Media URLs are omitted by default because they can grant access to recordings or voicemail. Pass the relevant explicit `include_*_urls` option only when needed. On call-list and call-search tools, opting into media URLs returns full call records even when `compact` is left at its default.
+
+Set `AIRCALL_TIMEOUT_MS` to a positive integer to override the default 30-second request timeout.
 
 See [SECURITY.md](SECURITY.md) for the full security model.
 

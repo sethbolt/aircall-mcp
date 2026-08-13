@@ -1,4 +1,5 @@
 import type { AircallApi, Query, RequestOptions } from "./types.js";
+import { VERSION } from "./version.js";
 
 const AIRCALL_API_ORIGIN = "https://api.aircall.io";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -219,7 +220,7 @@ export class AircallClient implements AircallApi {
           headers: {
             Accept: "application/json",
             Authorization: this.authorization,
-            "User-Agent": "aircall-mcp/0.1.0",
+            "User-Agent": `aircall-mcp/${VERSION}`,
           },
           signal: activeSignal.signal,
         });

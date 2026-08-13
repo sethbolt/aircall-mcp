@@ -86,6 +86,53 @@ test("list calls defaults to compact newest-first output with media omitted", as
   });
 });
 
+test("explicit media URL opt-in returns full call records", async () => {
+  const api = {
+    get: async () => ({
+      meta: { count: 1 },
+      calls: [
+        {
+          id: 100,
+          recording: "https://example.test/signed-recording",
+          comments: [{ content: "full record" }],
+        },
+      ],
+    }),
+  };
+
+  await withMcp(api, async (client) => {
+    const result = await client.callTool({
+      name: "aircall_list_calls",
+      arguments: { include_media_urls: true },
+    });
+    const parsed = JSON.parse(textOf(result));
+    assert.equal(parsed.calls[0].recording, "https://example.test/signed-recording");
+    assert.equal(parsed.calls[0].comments[0].content, "full record");
+  });
+});
+
+test("number responses omit any future media fields unless explicitly requested", async () => {
+  const api = {
+    get: async () => ({
+      number: {
+        id: 3,
+        recording: "https://example.test/future-media-field",
+        messages: { welcome: "https://example.test/welcome.mp3" },
+      },
+    }),
+  };
+
+  await withMcp(api, async (client) => {
+    const result = await client.callTool({
+      name: "aircall_get_number",
+      arguments: { number_id: 3 },
+    });
+    const parsed = JSON.parse(textOf(result));
+    assert.match(parsed.number.recording, /omitted/);
+    assert.deepEqual(parsed.number.messages, { welcome: true });
+  });
+});
+
 test("user lookup safely encodes email identifiers", async () => {
   const requests = [];
   const api = {
