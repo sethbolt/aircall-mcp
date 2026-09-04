@@ -3,6 +3,8 @@
 import http from "node:http";
 import { URL } from "node:url";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import { AircallClient } from "./client.js";
 import { createAircallServer } from "./server.js";
@@ -36,18 +38,32 @@ async function main(): Promise<void> {
     timeoutMs: positiveIntegerEnvironment("AIRCALL_TIMEOUT_MS", 30_000),
   });
 
-  const transports = new Map<string, SSEServerTransport>();
+  // Streamable HTTP sessions keyed by session ID.
+  const streamableSessions = new Map<string, { transport: StreamableHTTPServerTransport; server: ReturnType<typeof createAircallServer> }>();
+
+  // Legacy SSE sessions.
+  const sseSessions = new Map<string, SSEServerTransport>();
+
+  function collectBody(req: http.IncomingMessage): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", () => resolve(body));
+      req.on("error", reject);
+    });
+  }
 
   const httpServer = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
 
     // CORS headers for cross-origin MCP clients.
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization",
+      "Content-Type, Authorization, Mcp-Session-Id, Accept",
     );
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -62,16 +78,98 @@ async function main(): Promise<void> {
       return;
     }
 
-    // SSE endpoint: establishes a long-lived connection.
+    // =============================================
+    // Streamable HTTP transport at /mcp
+    // =============================================
+    if (url.pathname === "/mcp") {
+      // POST /mcp: JSON-RPC messages (initialize or subsequent)
+      if (req.method === "POST") {
+        const bodyText = await collectBody(req);
+        let body: unknown;
+        try {
+          body = JSON.parse(bodyText);
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON" }));
+          return;
+        }
+
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+        // If this is an initialize request, create a new session.
+        if (isInitializeRequest(body)) {
+          const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => crypto.randomUUID(),
+            onsessioninitialized: (id) => {
+              const server = createAircallServer(api);
+              streamableSessions.set(id, { transport, server });
+              server.connect(transport).catch(() => {});
+            },
+          });
+
+          transport.onclose = () => {
+            const id = (transport as any).sessionId;
+            if (id && streamableSessions.has(id)) {
+              streamableSessions.get(id)!.server.close().catch(() => {});
+              streamableSessions.delete(id);
+            }
+          };
+
+          await transport.handleRequest(req, res, body);
+          return;
+        }
+
+        // Subsequent request: look up existing session.
+        if (sessionId && streamableSessions.has(sessionId)) {
+          const session = streamableSessions.get(sessionId)!;
+          await session.transport.handleRequest(req, res, body);
+          return;
+        }
+
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid or missing session. Send an initialize request first." }));
+        return;
+      }
+
+      // GET /mcp: SSE stream for server-to-client notifications (Streamable HTTP)
+      if (req.method === "GET") {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        if (sessionId && streamableSessions.has(sessionId)) {
+          const session = streamableSessions.get(sessionId)!;
+          await session.transport.handleRequest(req, res);
+          return;
+        }
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid or missing session ID" }));
+        return;
+      }
+
+      // DELETE /mcp: close session
+      if (req.method === "DELETE") {
+        const sessionId = req.headers["mcp-session-id"] as string | undefined;
+        if (sessionId && streamableSessions.has(sessionId)) {
+          const session = streamableSessions.get(sessionId)!;
+          await session.transport.handleRequest(req, res);
+          return;
+        }
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid or missing session ID" }));
+        return;
+      }
+    }
+
+    // =============================================
+    // Legacy SSE transport at /sse + /message
+    // =============================================
     if (req.method === "GET" && url.pathname === "/sse") {
       const transport = new SSEServerTransport("/message", res);
-      const sessionId = transport.sessionId;
-      transports.set(sessionId, transport);
+      const sid = transport.sessionId;
+      sseSessions.set(sid, transport);
 
       const server = createAircallServer(api);
 
       res.on("close", () => {
-        transports.delete(sessionId);
+        sseSessions.delete(sid);
         server.close().catch(() => {});
       });
 
@@ -79,16 +177,15 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Message endpoint: receives JSON-RPC messages from the client.
     if (req.method === "POST" && url.pathname === "/message") {
       const sessionId = url.searchParams.get("sessionId");
-      if (!sessionId || !transports.has(sessionId)) {
+      if (!sessionId || !sseSessions.has(sessionId)) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid or missing sessionId" }));
         return;
       }
 
-      const transport = transports.get(sessionId)!;
+      const transport = sseSessions.get(sessionId)!;
       await transport.handlePostMessage(req, res);
       return;
     }
@@ -99,10 +196,10 @@ async function main(): Promise<void> {
       res.end(
         JSON.stringify({
           name: "aircall-mcp",
-          description: "Read-only MCP server for Aircall (HTTP/SSE transport)",
+          description: "Read-only MCP server for Aircall",
           endpoints: {
-            sse: "/sse",
-            message: "/message",
+            mcp: "/mcp (Streamable HTTP, recommended)",
+            sse: "/sse (legacy SSE)",
             health: "/health",
           },
         }),
@@ -114,9 +211,9 @@ async function main(): Promise<void> {
     res.end(JSON.stringify({ error: "Not found" }));
   });
 
-  httpServer.listen(port, () => {
-    console.error(`aircall-mcp: HTTP/SSE server listening on port ${port}`);
-    console.error(`aircall-mcp: Connect MCP clients to http://localhost:${port}/sse`);
+  httpServer.listen(port, "0.0.0.0", () => {
+    console.error(`aircall-mcp: HTTP server listening on 0.0.0.0:${port}`);
+    console.error(`aircall-mcp: Streamable HTTP at /mcp | Legacy SSE at /sse`);
   });
 }
 
