@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import http from "node:http";
+import crypto from "node:crypto";
 import { URL } from "node:url";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -61,9 +62,9 @@ async function main(): Promise<void> {
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, Mcp-Session-Id, Accept",
+      "Content-Type, Authorization, Mcp-Session-Id, Accept, mcp-session-id",
     );
-    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id, mcp-session-id");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -98,24 +99,27 @@ async function main(): Promise<void> {
 
         // If this is an initialize request, create a new session.
         if (isInitializeRequest(body)) {
+          let capturedSessionId: string | undefined;
+
           const transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => crypto.randomUUID(),
-            onsessioninitialized: (id) => {
-              const server = createAircallServer(api);
-              streamableSessions.set(id, { transport, server });
-              server.connect(transport).catch(() => {});
+            sessionIdGenerator: () => {
+              capturedSessionId = crypto.randomUUID();
+              return capturedSessionId;
             },
           });
 
-          transport.onclose = () => {
-            const id = (transport as any).sessionId;
-            if (id && streamableSessions.has(id)) {
-              streamableSessions.get(id)!.server.close().catch(() => {});
-              streamableSessions.delete(id);
-            }
-          };
-
+          const server = createAircallServer(api);
+          await server.connect(transport);
           await transport.handleRequest(req, res, body);
+
+          if (capturedSessionId) {
+            streamableSessions.set(capturedSessionId, { transport, server });
+
+            transport.onclose = () => {
+              streamableSessions.delete(capturedSessionId!);
+              server.close().catch(() => {});
+            };
+          }
           return;
         }
 
